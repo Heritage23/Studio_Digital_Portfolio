@@ -130,7 +130,7 @@ Visitor's message:
                 "thinking_level": "low",
 
                 # Prevent unnecessarily long responses
-                "max_output_tokens": 250,
+                "max_output_tokens": 500,
             },
         )
 
