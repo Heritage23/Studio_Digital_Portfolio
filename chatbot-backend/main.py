@@ -1,6 +1,6 @@
 import os
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from dotenv import load_dotenv
@@ -8,9 +8,12 @@ from google import genai
 
 load_dotenv()
 
+# --------------------------------------------------
+# FastAPI
+# --------------------------------------------------
+
 app = FastAPI()
 
-# Allow the portfolio frontend to communicate with the backend
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -20,7 +23,10 @@ app.add_middleware(
 )
 
 
+# --------------------------------------------------
 # Gemini client
+# --------------------------------------------------
+
 client = genai.Client(
     api_key=os.getenv("GEMINI_API_KEY")
 )
@@ -28,9 +34,17 @@ client = genai.Client(
 MODEL = os.getenv("GEMINI_MODEL", "gemini-3.6-flash")
 
 
+# --------------------------------------------------
+# Request model
+# --------------------------------------------------
+
 class ChatRequest(BaseModel):
     message: str
 
+
+# --------------------------------------------------
+# Original Studio Digital system prompt
+# --------------------------------------------------
 
 SYSTEM_PROMPT = """
 You are the virtual assistant for Studio Digital.
@@ -61,9 +75,12 @@ Instead, politely tell the visitor that you don't have enough information to ans
 Do not invent services, prices, testimonials, clients, results, guarantees, or company information that has not been provided.
 
 If you don't know something, say so instead of making it up.
-
 """
 
+
+# --------------------------------------------------
+# Home
+# --------------------------------------------------
 
 @app.get("/")
 def home():
@@ -72,6 +89,10 @@ def home():
     }
 
 
+# --------------------------------------------------
+# Health check
+# --------------------------------------------------
+
 @app.get("/health")
 def health():
     return {
@@ -79,21 +100,51 @@ def health():
     }
 
 
+# --------------------------------------------------
+# Chat
+# --------------------------------------------------
+
 @app.post("/chat")
 def chat(request: ChatRequest):
 
-    prompt = f"""
+    message = request.message.strip()
+
+    if not message:
+        raise HTTPException(
+            status_code=400,
+            detail="Message cannot be empty."
+        )
+
+    try:
+
+        response = client.interactions.create(
+            model=MODEL,
+            input=f"""
 {SYSTEM_PROMPT}
 
 Visitor's message:
-{request.message}
-"""
+{message}
+""",
+            generation_config={
+                # Keep Gemini's reasoning minimal for faster responses
+                "thinking_level": "low",
 
-    response = client.interactions.create(
-        model=MODEL,
-        input=prompt,
-    )
+                # Prevent unnecessarily long responses
+                "max_output_tokens": 250,
+            },
+        )
 
-    return {
-        "reply": response.output_text
-    }
+        reply = response.output_text.strip()
+
+        return {
+            "reply": reply
+        }
+
+    except Exception as error:
+
+        print(f"Gemini error: {error}")
+
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to generate a response right now."
+        )
