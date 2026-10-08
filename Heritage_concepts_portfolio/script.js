@@ -1,5 +1,6 @@
 const BACKEND_URL = "https://studio-digital-portfolio.onrender.com";
 // const BACKEND_URL = "http://127.0.0.1:8000";
+fetch(`${BACKEND_URL}/`).catch(() => {});
 
 /* ==================================================
 HAMBURGER MENU
