@@ -1,4 +1,5 @@
 import os
+import time
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -17,7 +18,7 @@ app = FastAPI()
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
+    allow_credentials=False,  # you don't use cookies, so this is not needed
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -32,6 +33,10 @@ client = genai.Client(
 )
 
 MODEL = os.getenv("GEMINI_MODEL", "gemini-3.6-flash")
+
+# Optional: a second model to try if the first one is rate limited.
+# Add GEMINI_FALLBACK_MODEL in Render's Environment tab to use it.
+FALLBACK_MODEL = os.getenv("GEMINI_FALLBACK_MODEL")
 
 
 # --------------------------------------------------
@@ -79,6 +84,41 @@ If you don't know something, say so instead of making it up.
 
 
 # --------------------------------------------------
+# Helpers
+# --------------------------------------------------
+
+def is_rate_limit(error: Exception) -> bool:
+    """True if the error looks like a Gemini 429 / quota error."""
+    return getattr(error, "code", None) == 429 or "429" in str(error)
+
+
+def generate(model: str, message: str) -> str:
+    """Call Gemini once and log how long it took."""
+    start = time.time()
+
+    response = client.interactions.create(
+        model=model,
+        input=f"""
+{SYSTEM_PROMPT}
+
+Visitor's message:
+{message}
+""",
+        generation_config={
+            # Keep Gemini's reasoning minimal for faster responses
+            "thinking_level": "low",
+
+            # Prevent unnecessarily long responses
+            "max_output_tokens": 500,
+        },
+    )
+
+    print(f"Gemini ({model}) took {time.time() - start:.1f} seconds")
+
+    return response.output_text.strip()
+
+
+# --------------------------------------------------
 # Home
 # --------------------------------------------------
 
@@ -115,36 +155,34 @@ def chat(request: ChatRequest):
             detail="Message cannot be empty."
         )
 
-    try:
+    models = [MODEL]
+    if FALLBACK_MODEL and FALLBACK_MODEL != MODEL:
+        models.append(FALLBACK_MODEL)
 
-        response = client.interactions.create(
-            model=MODEL,
-            input=f"""
-{SYSTEM_PROMPT}
+    rate_limited = False
 
-Visitor's message:
-{message}
-""",
-            generation_config={
-                # Keep Gemini's reasoning minimal for faster responses
-                "thinking_level": "low",
+    for model in models:
+        try:
+            return {
+                "reply": generate(model, message)
+            }
 
-                # Prevent unnecessarily long responses
-                "max_output_tokens": 500,
-            },
-        )
+        except Exception as error:
+            print(f"Gemini error ({model}): {error}")
 
-        reply = response.output_text.strip()
+            if is_rate_limit(error):
+                rate_limited = True
+                continue  # try the fallback model if there is one
 
-        return {
-            "reply": reply
-        }
+            break  # other errors: no point trying another model
 
-    except Exception as error:
-
-        print(f"Gemini error: {error}")
-
+    if rate_limited:
         raise HTTPException(
-            status_code=500,
-            detail="Unable to generate a response right now."
+            status_code=429,
+            detail="The assistant is busy right now. Please try again in a minute."
         )
+
+    raise HTTPException(
+        status_code=500,
+        detail="Unable to generate a response right now."
+    )
